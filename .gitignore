@@ -3,12 +3,5 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+*.exe
 .venv/
-venv/
-.vscode/
-.idea/
-
-# Local test files
-*.html
-*.htm
-*.css
