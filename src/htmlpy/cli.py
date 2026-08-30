@@ -1,39 +1,104 @@
-import sys
+import argparse
 from pathlib import Path
 
-from .parser import parse
-from .renderer import Renderer
+from .exporter import export_exe
 
 
-def main():
+def build_python(input_file):
+    input_path = Path(input_file).resolve()
 
-    if len(sys.argv) < 2:
-        print("Usage: htmlpy <html file>")
-        return
+    if not input_path.exists():
+        raise FileNotFoundError(
+            f"File not found: {input_file}"
+        )
 
-    filename = Path(sys.argv[1])
+    if input_path.suffix.lower() not in {".html", ".htm"}:
+        raise ValueError("Input file must be an HTML file.")
 
-    if not filename.exists():
-        print(f"File not found: {filename}")
-        return
-
-    if filename.suffix.lower() not in {".html", ".htm"}:
-        print("htmlpy expects an HTML file.")
-        return
-
-    html = filename.read_text(
+    html = input_path.read_text(
         encoding="utf-8"
     )
 
-    document, stylesheets = parse(
-        html,
-        filename.parent
+    output_path = input_path.with_suffix(".py")
+
+    code = f'''from htmlpy.parser import parse
+from htmlpy.renderer import Renderer
+
+html = {html!r}
+
+root, stylesheets = parse(
+    html,
+    base_path={str(input_path.parent)!r}
+)
+
+renderer = Renderer(
+    title={input_path.stem!r},
+    stylesheets=stylesheets
+)
+
+renderer.render(root)
+renderer.run()
+'''
+
+    output_path.write_text(
+        code,
+        encoding="utf-8"
     )
 
-    renderer = Renderer(
-        title=filename.stem,
-        stylesheets=stylesheets
+    print(f"Created: {output_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="htmlpy",
+        description="Build HTML applications with htmlpy."
     )
 
-    renderer.render(document)
-    renderer.run()
+    parser.add_argument(
+        "input",
+        help="HTML file to build"
+    )
+
+    parser.add_argument(
+        "-e",
+        "--exe",
+        action="store_true",
+        help="Export the application as an executable"
+    )
+
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Output filename"
+    )
+
+    parser.add_argument(
+        "-i",
+        "--icon",
+        help="Application icon (.ico)"
+    )
+
+    args = parser.parse_args()
+
+    try:
+        if args.exe:
+            export_exe(
+                args.input,
+                output=args.output,
+                icon=args.icon
+            )
+        else:
+            if args.output:
+                parser.error("-o can only be used with -e")
+
+            if args.icon:
+                parser.error("-i can only be used with -e")
+
+            build_python(args.input)
+
+    except (FileNotFoundError, ValueError, RuntimeError) as error:
+        parser.error(str(error))
+
+
+if __name__ == "__main__":
+    main()
