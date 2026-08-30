@@ -1,813 +1,466 @@
-import tkinter as tk
+from .layout import layout
+import sys
 from pathlib import Path
-from .dom import Element
+import ctypes
+from ctypes import wintypes
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-NON_RENDERED_ELEMENTS = {
-    "html",
-    "head",
-    "title",
-    "meta",
-    "link",
-    "style",
-    "script",
-    "noscript",
-    "base",
-}
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from canvas import Canvas
 
 
 class Renderer:
-
     def __init__(
         self,
-        width=800,
-        height=600,
         title="htmlpy",
         stylesheets=None,
-        base_path=None
+        width=800,
+        height=600,
+        document=None,
     ):
-        self.width = width
-        self.height = height
         self.title = title
         self.stylesheets = stylesheets or []
-        self.base_path = Path(base_path) if base_path else None
+        self.width = width
+        self.height = height
+        self.document = document
 
-        self.root = tk.Tk()
-        self.root.title(title)
-        self.root.geometry(f"{width}x{height}")
+        self.layout = None
+        self.canvas = None
 
-        # -----------------------------------------------------
-        # Scrollable page
-        # -----------------------------------------------------
+    def build_layout(self, document=None):
+        if document is not None:
+            self.document = document
 
-        self.canvas = tk.Canvas(
-            self.root,
-            highlightthickness=0
+        if self.document is None:
+            raise ValueError("No document provided")
+
+        self.layout = layout(
+            self.document,
+            self.width,
+            self.height,
         )
 
-        self.scrollbar = tk.Scrollbar(
-            self.root,
-            orient="vertical",
-            command=self.canvas.yview
+        return self.layout
+
+    def render(self, document=None):
+        return self.build_layout(document)
+
+    def run(self, document=None):
+        if document is not None:
+            self.document = document
+
+        if self.document is None:
+            raise ValueError("No document provided")
+
+        self.build_layout()
+
+        self.canvas = Canvas(
+            title=self.title,
+            width=self.width,
+            height=self.height,
         )
 
-        self.canvas.configure(
-            yscrollcommand=self.scrollbar.set
-        )
+        self.canvas.on_draw = self._draw
+        self.canvas.show()
 
-        self.scrollbar.pack(
-            side="right",
-            fill="y"
-        )
+    # ========================================================
+    # Drawing
+    # ========================================================
 
-        self.canvas.pack(
-            side="left",
-            fill="both",
-            expand=True
-        )
+    def _draw(self, hdc):
+        if self.layout is None:
+            return
 
-        self.container = tk.Frame(
-            self.canvas,
-            bg="white"
-        )
+        self._draw_box(hdc, self.layout)
 
-        self.canvas_window = self.canvas.create_window(
-            (0, 0),
-            window=self.container,
-            anchor="nw"
-        )
+    def _draw_box(self, hdc, box):
+        node = box.node
 
-        self.container.bind(
-            "<Configure>",
-            self.on_container_configure
-        )
+        rect = box.rect
 
-        self.canvas.bind(
-            "<Configure>",
-            self.on_canvas_configure
-        )
+        # ----------------------------------------------------
+        # Background
+        # ----------------------------------------------------
 
-        # Mouse wheel scrolling.
-        self.canvas.bind_all(
-            "<MouseWheel>",
-            self.on_mousewheel
-        )
-
-    # ---------------------------------------------------------
-    # Scrolling
-    # ---------------------------------------------------------
-
-    def on_container_configure(self, event=None):
-        self.canvas.configure(
-            scrollregion=self.canvas.bbox("all")
-        )
-
-    def on_canvas_configure(self, event):
-        self.canvas.itemconfig(
-            self.canvas_window,
-            width=event.width
-        )
-
-    def on_mousewheel(self, event):
-        self.canvas.yview_scroll(
-            int(-1 * (event.delta / 120)),
-            "units"
-        )
-
-    # ---------------------------------------------------------
-    # CSS
-    # ---------------------------------------------------------
-
-    def get_styles(self, element):
-        styles = {}
-
-        for rule in self.stylesheets:
-            selector = rule.selector
-
-            if selector == element.tag:
-                styles.update(
-                    rule.properties
-                )
-
-            elif selector.startswith("."):
-                class_name = element.attributes.get(
-                    "class",
-                    ""
-                )
-
-                if selector[1:] in class_name.split():
-                    styles.update(
-                        rule.properties
-                    )
-
-            elif selector.startswith("#"):
-                element_id = element.attributes.get(
-                    "id"
-                )
-
-                if selector[1:] == element_id:
-                    styles.update(
-                        rule.properties
-                    )
-
-        return styles
-
-    # ---------------------------------------------------------
-    # Helpers
-    # ---------------------------------------------------------
-
-    def get_text(self, element):
-
-        parts = []
-
-        def collect(node):
-
-            for child in node.children:
-
-                if isinstance(child, str):
-                    parts.append(child)
-
-                elif isinstance(child, Element):
-                    collect(child)
-
-        collect(element)
-
-        return "".join(parts).strip()
-
-    def parse_font_size(
-        self,
-        styles,
-        default=16
-    ):
-
-        value = styles.get(
-            "font-size",
-            f"{default}px"
-        )
-
-        try:
-            return int(
-                value.replace(
-                    "px",
-                    ""
-                ).strip()
-            )
-
-        except ValueError:
-            return default
-
-    def get_color(self, styles):
-        return styles.get(
-            "color",
-            "black"
-        )
-
-    def get_background(self, styles):
-        return styles.get(
+        background = self._style(
+            node,
             "background-color",
-            "white"
+            None,
         )
 
-    # ---------------------------------------------------------
-    # Element rendering
-    # ---------------------------------------------------------
+        if background:
+            self._fill_rect(
+                hdc,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                background,
+            )
 
-    def render_element(
+        # ----------------------------------------------------
+        # Borders
+        # ----------------------------------------------------
+
+        border_width = self._style(
+            node,
+            "border-width",
+            None,
+        )
+
+        border_color = self._style(
+            node,
+            "border-color",
+            None,
+        )
+
+        if border_width and border_color:
+            self._draw_border(
+                hdc,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                border_width,
+                border_color,
+            )
+
+        # ----------------------------------------------------
+        # Text
+        # ----------------------------------------------------
+
+        text = getattr(node, "text", None)
+
+        if text is not None:
+            text = str(text)
+
+            if text.strip():
+                self._draw_text(
+                    hdc,
+                    text,
+                    rect.x,
+                    rect.y,
+                    node,
+                )
+
+        # ----------------------------------------------------
+        # Children
+        # ----------------------------------------------------
+
+        for child in box.children:
+            self._draw_box(hdc, child)
+
+    # ========================================================
+    # Styles
+    # ========================================================
+
+    def _style(self, node, name, default=None):
+        styles = getattr(node, "styles", None)
+
+        if isinstance(styles, dict):
+            return styles.get(name, default)
+
+        return default
+
+    # ========================================================
+    # Text
+    # ========================================================
+
+    def _draw_text(
         self,
-        element,
-        parent
+        hdc,
+        text,
+        x,
+        y,
+        node,
     ):
+        gdi32 = ctypes.windll.gdi32
 
-        tag = element.tag.lower()
-        styles = self.get_styles(element)
+        color = self._style(
+            node,
+            "color",
+            "#000000",
+        )
 
-        # -----------------------------------------------------
-        # Non-visible document elements
-        # -----------------------------------------------------
+        rgb = self._parse_color(color)
 
-        if tag in NON_RENDERED_ELEMENTS:
-
-            for child in element.children:
-
-                if isinstance(child, Element):
-                    self.render_element(
-                        child,
-                        parent
-                    )
-
-            return
-
-        # -----------------------------------------------------
-        # Headings
-        # -----------------------------------------------------
-
-        if tag in {
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "h5",
-            "h6"
-        }:
-
-            sizes = {
-                "h1": 32,
-                "h2": 26,
-                "h3": 22,
-                "h4": 18,
-                "h5": 16,
-                "h6": 14,
-            }
-
-            font_size = self.parse_font_size(
-                styles,
-                sizes[tag]
+        if rgb is not None:
+            gdi32.SetTextColor(
+                hdc,
+                self._rgb(*rgb),
             )
 
-            label = tk.Label(
-                parent,
-                text=self.get_text(element),
-                font=(
-                    "Arial",
-                    font_size,
-                    "bold"
-                ),
-                fg=self.get_color(styles),
-                bg=self.get_background(styles),
-                anchor="w",
-                justify="left"
+        gdi32.SetBkMode(
+            hdc,
+            1,
+        )
+
+        font = self._create_font(node)
+
+        old_font = None
+
+        if font:
+            old_font = gdi32.SelectObject(
+                hdc,
+                font,
             )
 
-            label.pack(
-                fill="x",
-                padx=20,
-                pady=(10, 5)
+        # Handle multiline text.
+        lines = text.splitlines()
+
+        if not lines:
+            lines = [""]
+
+        line_height = self._font_size(node) + 4
+
+        for index, line in enumerate(lines):
+            gdi32.TextOutW(
+                hdc,
+                int(x),
+                int(y + index * line_height),
+                line,
+                len(line),
             )
 
-        # -----------------------------------------------------
-        # Paragraph / inline-ish text
-        # -----------------------------------------------------
-
-        elif tag in {
-            "p",
-            "span",
-            "small",
-            "mark",
-            "del",
-            "ins",
-            "sub",
-            "sup"
-        }:
-
-            font_size = self.parse_font_size(
-                styles,
-                16
+        if old_font:
+            gdi32.SelectObject(
+                hdc,
+                old_font,
             )
 
-            label = tk.Label(
-                parent,
-                text=self.get_text(element),
-                font=("Arial", font_size),
-                fg=self.get_color(styles),
-                bg=self.get_background(styles),
-                anchor="w",
-                justify="left",
-                wraplength=self.width - 40
+        if font:
+            gdi32.DeleteObject(font)
+
+    # ========================================================
+    # Fonts
+    # ========================================================
+
+    def _font_size(self, node):
+        value = self._style(
+            node,
+            "font-size",
+            "16px",
+        )
+
+        try:
+            return float(
+                str(value)
+                .replace("px", "")
+                .strip()
             )
-
-            label.pack(
-                fill="x",
-                padx=20,
-                pady=5
-            )
-
-        # -----------------------------------------------------
-        # Bold / italic
-        # -----------------------------------------------------
-
-        elif tag in {
-            "strong",
-            "b",
-            "em",
-            "i"
-        }:
-
-            font_size = self.parse_font_size(
-                styles,
-                16
-            )
-
-            weight = (
-                "bold"
-                if tag in {
-                    "strong",
-                    "b"
-                }
-                else "normal"
-            )
-
-            slant = (
-                "italic"
-                if tag in {
-                    "em",
-                    "i"
-                }
-                else "roman"
-            )
-
-            label = tk.Label(
-                parent,
-                text=self.get_text(element),
-                font=(
-                    "Arial",
-                    font_size,
-                    weight,
-                    slant
-                ),
-                fg=self.get_color(styles),
-                bg=self.get_background(styles),
-                anchor="w"
-            )
-
-            label.pack(
-                fill="x",
-                padx=20,
-                pady=3
-            )
-
-        # -----------------------------------------------------
-        # Links
-        # -----------------------------------------------------
-
-        elif tag == "a":
-
-            link = tk.Label(
-                parent,
-                text=self.get_text(element),
-                fg=(
-                    self.get_color(styles)
-                    if "color" in styles
-                    else "blue"
-                ),
-                bg=self.get_background(styles),
-                cursor="hand2",
-                anchor="w",
-                font=(
-                    "Arial",
-                    16,
-                    "underline"
-                )
-            )
-
-            link.pack(
-                fill="x",
-                padx=20,
-                pady=4
-            )
-
-        # -----------------------------------------------------
-        # Buttons
-        # -----------------------------------------------------
-
-        elif tag == "button":
-
-            button = tk.Button(
-                parent,
-                text=self.get_text(element),
-                font=("Arial", 14)
-            )
-
-            button.pack(
-                anchor="w",
-                padx=20,
-                pady=8
-            )
-
-        # -----------------------------------------------------
-        # Images
-        # -----------------------------------------------------
-
-        elif tag == "img":
-
-            self.render_image(
-                element,
-                parent
-            )
-
-        # -----------------------------------------------------
-        # Lists
-        # -----------------------------------------------------
-
-        elif tag in {
-            "ul",
-            "ol"
-        }:
-
-            list_frame = tk.Frame(
-                parent,
-                bg=self.get_background(styles)
-            )
-
-            list_frame.pack(
-                fill="x",
-                padx=20,
-                pady=5
-            )
-
-            number = 1
-
-            for child in element.children:
-
-                if not isinstance(
-                    child,
-                    Element
-                ):
-                    continue
-
-                if child.tag.lower() != "li":
-                    continue
-
-                prefix = (
-                    f"{number}. "
-                    if tag == "ol"
-                    else "• "
-                )
-
-                label = tk.Label(
-                    list_frame,
-                    text=prefix + self.get_text(child),
-                    font=("Arial", 16),
-                    fg=self.get_color(styles),
-                    bg=self.get_background(styles),
-                    anchor="w"
-                )
-
-                label.pack(
-                    fill="x"
-                )
-
-                number += 1
-
-            return
-
-        # -----------------------------------------------------
-        # List item
-        # -----------------------------------------------------
-
-        elif tag == "li":
-            return
-
-        # -----------------------------------------------------
-        # Input
-        # -----------------------------------------------------
-
-        elif tag == "input":
-
-            input_type = element.attributes.get(
-                "type",
-                "text"
-            ).lower()
-
-            if input_type == "hidden":
-                return
-
-            entry = tk.Entry(
-                parent,
-                font=("Arial", 14)
-            )
-
-            placeholder = element.attributes.get(
-                "placeholder"
-            )
-
-            if placeholder:
-                entry.insert(
-                    0,
-                    placeholder
-                )
-
-            entry.pack(
-                fill="x",
-                padx=20,
-                pady=5
-            )
-
-        # -----------------------------------------------------
-        # Textarea
-        # -----------------------------------------------------
-
-        elif tag == "textarea":
-
-            textarea = tk.Text(
-                parent,
-                height=6,
-                font=("Arial", 14)
-            )
-
-            textarea.pack(
-                fill="x",
-                padx=20,
-                pady=5
-            )
-
-        # -----------------------------------------------------
-        # Label
-        # -----------------------------------------------------
-
-        elif tag == "label":
-
-            label = tk.Label(
-                parent,
-                text=self.get_text(element),
-                font=("Arial", 14),
-                bg=self.get_background(styles),
-                fg=self.get_color(styles),
-                anchor="w"
-            )
-
-            label.pack(
-                fill="x",
-                padx=20,
-                pady=3
-            )
-
-        # -----------------------------------------------------
-        # Select
-        # -----------------------------------------------------
-
-        elif tag == "select":
-
-            variable = tk.StringVar()
-
-            option_values = []
-
-            for child in element.children:
-
-                if isinstance(
-                    child,
-                    Element
-                ):
-
-                    if child.tag.lower() == "option":
-                        option_values.append(
-                            self.get_text(child)
-                        )
-
-            if option_values:
-                variable.set(
-                    option_values[0]
-                )
-
-            option_menu = tk.OptionMenu(
-                parent,
-                variable,
-                *option_values
-            )
-
-            option_menu.pack(
-                anchor="w",
-                padx=20,
-                pady=5
-            )
-
-        # -----------------------------------------------------
-        # Horizontal rule
-        # -----------------------------------------------------
-
-        elif tag == "hr":
-
-            separator = tk.Frame(
-                parent,
-                height=2,
-                bg="#cccccc"
-            )
-
-            separator.pack(
-                fill="x",
-                padx=20,
-                pady=10
-            )
-
-        # -----------------------------------------------------
-        # Line break
-        # -----------------------------------------------------
-
-        elif tag == "br":
-
-            spacer = tk.Frame(
-                parent,
-                height=8
-            )
-
-            spacer.pack()
-
-        # -----------------------------------------------------
-        # Generic containers
-        # -----------------------------------------------------
-
-        elif tag in {
-            "div",
-            "section",
-            "article",
-            "main",
-            "header",
-            "footer",
-            "nav",
-            "aside",
-            "figure",
-            "figcaption",
-            "form",
-            "details",
-            "summary"
-        }:
-
-            frame = tk.Frame(
-                parent,
-                bg=self.get_background(styles)
-            )
-
-            frame.pack(
-                fill="x",
-                expand=False
-            )
-
-            for child in element.children:
-
-                if isinstance(
-                    child,
-                    Element
-                ):
-
-                    self.render_element(
-                        child,
-                        frame
-                    )
-
-            return
-
-        # -----------------------------------------------------
-        # Unknown elements
-        # -----------------------------------------------------
-
+        except ValueError:
+            return 16
+
+    def _create_font(self, node):
+        gdi32 = ctypes.windll.gdi32
+
+        size = self._font_size(node)
+
+        weight = self._style(
+            node,
+            "font-weight",
+            "normal",
+        )
+
+        if str(weight).lower() in (
+            "bold",
+            "700",
+            "800",
+            "900",
+        ):
+            font_weight = 700
         else:
+            font_weight = 400
 
-            frame = tk.Frame(
-                parent,
-                bg=self.get_background(styles)
-            )
-
-            frame.pack(
-                fill="x"
-            )
-
-            for child in element.children:
-
-                if isinstance(
-                    child,
-                    Element
-                ):
-
-                    self.render_element(
-                        child,
-                        frame
-                    )
-
-            return
-
-        # -----------------------------------------------------
-        # Render children
-        # -----------------------------------------------------
-
-        for child in element.children:
-
-            if isinstance(
-                child,
-                Element
-            ):
-
-                self.render_element(
-                    child,
-                    parent
-                )
-
-    # ---------------------------------------------------------
-    # Image rendering
-    # ---------------------------------------------------------
-
-    def render_image(
-        self,
-        element,
-        parent
-    ):
-
-        src = element.attributes.get(
-            "src"
+        italic = self._style(
+            node,
+            "font-style",
+            "normal",
         )
 
-        if not src:
+        is_italic = 1 if str(italic).lower() == "italic" else 0
+
+        return gdi32.CreateFontW(
+            -int(size),
+            0,
+            0,
+            0,
+            font_weight,
+            is_italic,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            "Arial",
+        )
+
+    # ========================================================
+    # Rectangles
+    # ========================================================
+
+    def _fill_rect(
+        self,
+        hdc,
+        x,
+        y,
+        width,
+        height,
+        color,
+    ):
+        rgb = self._parse_color(color)
+
+        if rgb is None:
             return
 
-        if not self.base_path:
-            return
+        gdi32 = ctypes.windll.gdi32
 
-        image_path = (
-            self.base_path / src
-        ).resolve()
+        brush = gdi32.CreateSolidBrush(
+            self._rgb(*rgb)
+        )
 
-        if not image_path.exists():
+        rect = wintypes.RECT(
+            int(x),
+            int(y),
+            int(x + width),
+            int(y + height),
+        )
+
+        gdi32.FillRect(
+            hdc,
+            ctypes.byref(rect),
+            brush,
+        )
+
+        gdi32.DeleteObject(
+            brush
+        )
+
+    def _draw_border(
+        self,
+        hdc,
+        x,
+        y,
+        width,
+        height,
+        border_width,
+        color,
+    ):
+        rgb = self._parse_color(color)
+
+        if rgb is None:
             return
 
         try:
-
-            image = tk.PhotoImage(
-                file=str(image_path)
+            thickness = max(
+                1,
+                int(
+                    str(border_width)
+                    .replace("px", "")
+                    .strip()
+                ),
             )
+        except ValueError:
+            thickness = 1
 
-            label = tk.Label(
-                parent,
-                image=image
-            )
+        gdi32 = ctypes.windll.gdi32
 
-            label.image = image
-
-            label.pack(
-                padx=20,
-                pady=10,
-                anchor="w"
-            )
-
-        except tk.TclError:
-            pass
-
-    # ---------------------------------------------------------
-    # Render document
-    # ---------------------------------------------------------
-
-    def render(self, root):
-
-        for element in root.children:
-
-            if isinstance(
-                element,
-                Element
-            ):
-
-                self.render_element(
-                    element,
-                    self.container
-                )
-
-        # Make sure the scrollbar knows
-        # the final document size.
-        self.root.update_idletasks()
-
-        self.canvas.configure(
-            scrollregion=self.canvas.bbox("all")
+        pen = gdi32.CreatePen(
+            0,
+            thickness,
+            self._rgb(*rgb),
         )
 
-    # ---------------------------------------------------------
-    # Run
-    # ---------------------------------------------------------
+        old_pen = gdi32.SelectObject(
+            hdc,
+            pen,
+        )
 
-    def run(self):
-        self.root.mainloop()
+        old_brush = gdi32.SelectObject(
+            hdc,
+            gdi32.GetStockObject(5),
+        )
+
+        gdi32.Rectangle(
+            hdc,
+            int(x),
+            int(y),
+            int(x + width),
+            int(y + height),
+        )
+
+        gdi32.SelectObject(
+            hdc,
+            old_pen,
+        )
+
+        gdi32.SelectObject(
+            hdc,
+            old_brush,
+        )
+
+        gdi32.DeleteObject(
+            pen
+        )
+
+    # ========================================================
+    # Colors
+    # ========================================================
+
+    @staticmethod
+    def _parse_color(value):
+        if not value:
+            return None
+
+        value = str(value).strip().lower()
+
+        named = {
+            "black": (0, 0, 0),
+            "white": (255, 255, 255),
+            "red": (255, 0, 0),
+            "green": (0, 128, 0),
+            "blue": (0, 0, 255),
+            "yellow": (255, 255, 0),
+            "gray": (128, 128, 128),
+            "grey": (128, 128, 128),
+            "orange": (255, 165, 0),
+            "purple": (128, 0, 128),
+            "transparent": None,
+        }
+
+        if value in named:
+            return named[value]
+
+        if value.startswith("#"):
+            value = value[1:]
+
+            if len(value) == 3:
+                value = "".join(
+                    c + c
+                    for c in value
+                )
+
+            if len(value) == 6:
+                try:
+                    return (
+                        int(value[0:2], 16),
+                        int(value[2:4], 16),
+                        int(value[4:6], 16),
+                    )
+                except ValueError:
+                    return None
+
+        return None
+
+    @staticmethod
+    def _rgb(r, g, b):
+        return (
+            r
+            | (g << 8)
+            | (b << 16)
+        )

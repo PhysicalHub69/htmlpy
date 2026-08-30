@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "htmlpy"
-version = "0.5.0"
+version = "0.6.0"
 description = "Package HTML applications into Python"
 requires-python = ">=3.9"
 
 [project.scripts]
-htmlpy = "htmlpy.cli:main"
+htmlpy = "htmlpy.builder:main"

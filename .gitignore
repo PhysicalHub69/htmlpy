@@ -5,3 +5,6 @@ build/
 dist/
 *.exe
 .venv/
+.html
+.css
+test_files/
