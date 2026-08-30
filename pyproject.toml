@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "htmlpy"
+version = "0.4.0"
+description = "Package HTML applications into Python"
+requires-python = ">=3.9"
+
+[project.scripts]
+htmlpy = "htmlpy.cli:main"
